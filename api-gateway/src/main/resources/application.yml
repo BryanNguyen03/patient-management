@@ -7,18 +7,36 @@ spring:
       server:
         webflux:
           routes:
-            ## route for patient-service
+                    ## route for patient-service
                     - id: patient-service-route
                       uri: http://patient-service:4000
                       predicates:
                         - Path=/api/patients/**
                       filters:
                         - StripPrefix=1
-                    ## Swagger API documentation route
+                        - JwtValidation
+
+                    ## Swagger API documentation route for patient-service
                     - id: api-docs-patient-route
                       uri: http://patient-service:4000
                       predicates:
                         - Path=/api-docs/patients
                       filters:
                         - RewritePath=/api-docs/patients,/v3/api-docs
+
+                    ## Swagger API documentation route for auth-service
+                    - id: api-docs-auth-route
+                      uri: http://auth-service:4005
+                      predicates:
+                        - Path=/api-docs/auth
+                      filters:
+                        - RewritePath=/api-docs/auth,/v3/api-docs
+
+                    ## auth service
+                    - id: auth-service-route
+                      uri: http://auth-service:4005
+                      predicates:
+                        - Path=/auth/**
+                      filters:
+                        - StripPrefix=1
 
