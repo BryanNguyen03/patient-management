@@ -6,6 +6,7 @@ import software.amazon.awscdk.*;
 import software.amazon.awscdk.services.ec2.InstanceType;
 import software.amazon.awscdk.services.ecs.*;
 import software.amazon.awscdk.services.ecs.Protocol;
+import software.amazon.awscdk.services.ecs.patterns.ApplicationLoadBalancedFargateService;
 import software.amazon.awscdk.services.logs.LogGroup;
 import software.amazon.awscdk.services.logs.RetentionDays;
 import software.amazon.awscdk.services.msk.CfnCluster;
@@ -72,6 +73,8 @@ public class LocalStack extends Stack {
         patientService.getNode().addDependency(billingService);
         patientService.getNode().addDependency(mskCluster);
 
+        createAPIGatewayService();
+
     }
 
     private Vpc createVpc() {
@@ -111,8 +114,8 @@ public class LocalStack extends Stack {
     private CfnCluster createMskCluster() {
         return CfnCluster.Builder.create(this, "MskCluster")
                 .clusterName("kafka-cluster")
-                .kafkaVersion("2.8.0")
-                .numberOfBrokerNodes(1)
+                .kafkaVersion("3.7.x")
+                .numberOfBrokerNodes(2)
                 .brokerNodeGroupInfo(CfnCluster.BrokerNodeGroupInfoProperty.builder()
                         .instanceType("kafka.m5.xlarge")
                         .clientSubnets(vpc.getPrivateSubnets()
@@ -140,7 +143,7 @@ public class LocalStack extends Stack {
         // ECS Task Definition
         FargateTaskDefinition taskDefinition = FargateTaskDefinition.Builder.create(this, id + "Task")
                 .cpu(256)
-                .memoryLimitMiB(512)
+                .memoryLimitMiB(1024)
                 .build();
 
         ContainerDefinitionOptions.Builder containerOptions = ContainerDefinitionOptions.builder()
@@ -193,6 +196,52 @@ public class LocalStack extends Stack {
                 .taskDefinition(taskDefinition)
                 .assignPublicIp(false)
                 .serviceName(imageName)
+                .build();
+
+    }
+
+    private void createAPIGatewayService() {
+        // ECS Task Definition
+        FargateTaskDefinition taskDefinition = FargateTaskDefinition.Builder.create(this, "APIGatewayTaskDefinition")
+                .cpu(256)
+                .memoryLimitMiB(512)
+                .build();
+
+        ContainerDefinitionOptions containerOptions = ContainerDefinitionOptions.builder()
+                .image(ContainerImage.fromRegistry("api-gateway"))
+                .environment(Map.of(
+                        "SPRING_PROFILES_ACTIVE", "prod",
+                        "AUTH_SERVICE_URL", "http://host.docker.internal:4005"
+                ))
+                .portMappings(List.of(4004).stream()
+                        .map(port -> PortMapping.builder()
+                                .containerPort(port)
+                                .hostPort(port)
+                                .protocol(Protocol.TCP)
+                                .build())
+                        .toList())
+                .logging(LogDriver.awsLogs(AwsLogDriverProps.builder()
+                        .logGroup(LogGroup.Builder.create(this, "ApiGatewayLogGroup")
+                                .logGroupName("/ecs/api-gateway")
+                                .removalPolicy(RemovalPolicy.DESTROY)
+                                // not needed for LocalStack but good practice
+                                .retention(RetentionDays.ONE_DAY)
+                                .build())
+                        .streamPrefix("api-gateway")
+                        .build()))
+                .build();
+
+        // link container options to our task definition
+        taskDefinition.addContainer("APIGatewayContainer", containerOptions);
+
+        // Create the API gateway service
+        ApplicationLoadBalancedFargateService apiGateway
+                = ApplicationLoadBalancedFargateService.Builder.create(this, "APIGatewayService")
+                .cluster(ecsCluster)
+                .serviceName("api-gateway")
+                .taskDefinition(taskDefinition)
+                .desiredCount(1)
+                .healthCheckGracePeriod(Duration.seconds(60))
                 .build();
 
     }
